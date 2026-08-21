@@ -1,0 +1,13 @@
+.env
+
+/bin/
+
+*.log
+
+# IDEs and OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Go tooling
+coverage.out

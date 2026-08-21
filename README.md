@@ -1,6 +1,6 @@
 # supermarket-stats
 
-Servicio Go que calcula y actualiza `product_stats` a partir del histórico de
+Servicio Go que calcula y actualiza `products_stats` a partir del histórico de
 precios de cada producto.
 
 ## Qué hace
@@ -8,7 +8,7 @@ precios de cada producto.
 - Lee supermercados habilitados, productos y precios desde PocketBase.
 - Calcula medias, diferencias, desviación, mínimos, máximos y cambios de precio
   para ventanas de 7, 30, 90 y 356 días, además del histórico completo.
-- Crea o actualiza un registro `product_stats` por producto.
+- Crea o actualiza un registro `products_stats` por producto.
 - Guarda un job por ejecución con tipo `stats:<nombre-del-supermarket>`.
 - Registra métricas de duración, throughput, productos procesados, precios
   cargados y logs de operaciones lentas.
@@ -130,7 +130,7 @@ go run ./cmd/stats-service
 ## Diseño
 
 - Un proceso de estadísticas por supermercado y coincidencia de cron.
-- Un job `product_stats` por proceso en `jobs`.
+- Un job `products_stats` por proceso en `jobs`.
 - Un pool de workers por productos.
 - Errores de producto acumulados en memoria y guardados al finalizar.
 - Estados finales: `completed`, `completed_with_errors` o `failed`.

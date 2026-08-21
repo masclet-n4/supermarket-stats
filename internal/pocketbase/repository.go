@@ -44,17 +44,17 @@ func (r *Repository) Prices(ctx context.Context, productID string) ([]Price, err
 func (r *Repository) FindStats(ctx context.Context, productID string) (*ProductStats, error) {
 	var page Page[ProductStats]
 	filter := fmt.Sprintf("product_id = '%s'", escapeFilter(productID))
-	if err := r.client.List(ctx, "product_stats", values(1, 2, filter), &page); err != nil { return nil, err }
+	if err := r.client.List(ctx, "products_stats", values(1, 2, filter), &page); err != nil { return nil, err }
 	if len(page.Items) == 0 { return nil, nil }
 	return &page.Items[0], nil
 }
 
 func (r *Repository) CreateStats(ctx context.Context, data any) error {
-	return r.client.Create(ctx, "product_stats", data, nil)
+	return r.client.Create(ctx, "products_stats", data, nil)
 }
 
 func (r *Repository) UpdateStats(ctx context.Context, id string, data any) error {
-	return r.client.Update(ctx, "product_stats", id, data, nil)
+	return r.client.Update(ctx, "products_stats", id, data, nil)
 }
 
 func (r *Repository) CreateJob(ctx context.Context, data any, out *Job) error {

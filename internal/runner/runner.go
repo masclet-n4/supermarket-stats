@@ -129,7 +129,7 @@ func (r *Runner) processProduct(ctx context.Context, product pocketbase.Product)
 	result := stats.Calculate(series, r.cfg.Now())
 	data := statsPayload(product.ID, result, r.cfg.Now())
 	existing, err := r.repo.FindStats(ctx, product.ID)
-	if err != nil { return len(prices), fmt.Errorf("find product_stats: %w", err) }
+	if err != nil { return len(prices), fmt.Errorf("find products_stats: %w", err) }
 	if existing == nil { return len(prices), r.repo.CreateStats(ctx, data) }
 	return len(prices), r.repo.UpdateStats(ctx, existing.ID, data)
 }

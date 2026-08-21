@@ -68,6 +68,22 @@ make build
 make check
 ```
 
+## Docker
+
+Construir y ejecutar:
+
+```bash
+docker build -t supermarket-stats .
+docker run --rm --env-file .env supermarket-stats
+```
+
+Para una ejecución manual:
+
+```bash
+docker run --rm --env-file .env supermarket-stats --run-all
+docker run --rm --env-file .env supermarket-stats --run-supermarket abc123
+```
+
 ## Cron
 
 `stats_schedule` usa cinco campos:

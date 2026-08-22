@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type ProductError struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
+	EntityID  string `json:"entity_id,omitempty"`
 }
 
 type runDetails struct {
@@ -34,9 +36,10 @@ type runDetails struct {
 	ProductsTotal  int    `json:"products_total"`
 	ProductsDone   int    `json:"products_processed"`
 	ProductsFailed int    `json:"products_failed"`
-	Workers        int    `json:"workers"`
+	Workers        int    `json:"worker_count"`
 	DurationMS     int64  `json:"duration_ms"`
-	ProductsPerSec float64 `json:"products_per_second"`
+	ProductsSaved  int    `json:"products_saved"`
+	ProductsPerSec float64 `json:"throughput_items_per_second"`
 	PricesLoaded   int    `json:"prices_loaded"`
 	AvgProductMS   int64  `json:"avg_product_duration_ms"`
 	MaxProductMS   int64  `json:"max_product_duration_ms"`
@@ -49,6 +52,21 @@ func New(repo *pocketbase.Repository, cfg Config) *Runner {
 	return &Runner{repo: repo, cfg: cfg}
 }
 
+func jobSlug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.NewReplacer("á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u", "ñ", "n").Replace(value)
+	var b strings.Builder
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' { b.WriteRune(r) } else if b.Len() > 0 { b.WriteByte('_') }
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func completedErrors() []ProductError {
+	// ponytail: PocketBase currently rejects []; remove this marker when the field accepts empty arrays.
+	return []ProductError{{Code: "job_completed", Message: "Job completed", Stage: "complete"}}
+}
+
 func (r *Runner) Run(ctx context.Context, supermarket pocketbase.Supermarket) error {
 	started := time.Now()
 	r.cfg.Log.Printf("stats job started supermarket=%s", supermarket.ID)
@@ -56,9 +74,9 @@ func (r *Runner) Run(ctx context.Context, supermarket pocketbase.Supermarket) er
 	if err != nil { return err }
 	details := runDetails{SupermarketID: supermarket.ID, ProductsTotal: len(products), Workers: r.cfg.Workers}
 	job := &pocketbase.Job{}
-	if err := r.repo.CreateJob(ctx, map[string]any{"type": "stats:" + supermarket.Name, "status": "running", "start_date": r.cfg.Now().UTC().Format(time.RFC3339), "details": details, "errors": map[string]any{}}, job); err != nil { return err }
+	if err := r.repo.CreateJob(ctx, map[string]any{"type": "stats:" + jobSlug(supermarket.Name), "status": "running", "start_date": r.cfg.Now().UTC().Format(time.RFC3339), "details": map[string]any{"schema_version": 1}, "errors": []ProductError{{Code: "job_started", Message: "Job started", Stage: "start"}}}, job); err != nil { return err }
 
-	errors := map[string]ProductError{}
+	errors := []ProductError{}
 	var metricsMu sync.Mutex
 	var productDuration time.Duration
 	var maxProductDuration time.Duration
@@ -80,7 +98,7 @@ func (r *Runner) Run(ctx context.Context, supermarket pocketbase.Supermarket) er
 			metricsMu.Unlock()
 			if elapsed >= time.Second { r.cfg.Log.Printf("slow product supermarket=%s product=%s duration_ms=%d", supermarket.ID, product.ID, elapsed.Milliseconds()) }
 			if err != nil {
-				mu.Lock(); errors[product.ID] = ProductError{Stage: "process", Code: "product_error", Message: err.Error(), Retryable: true}; details.ProductsFailed++; mu.Unlock()
+				mu.Lock(); errors = append(errors, ProductError{Stage: "process", Code: "product_error", Message: err.Error(), Retryable: true, EntityID: product.ID}); details.ProductsFailed++; mu.Unlock()
 			} else { mu.Lock(); details.ProductsDone++; mu.Unlock() }
 		}
 	}
@@ -89,11 +107,11 @@ func (r *Runner) Run(ctx context.Context, supermarket pocketbase.Supermarket) er
 	if workers == 0 {
 		details.DurationMS = time.Since(started).Milliseconds()
 		r.cfg.Log.Printf("stats job finished supermarket=%s duration_ms=%d processed=0 failed=0 products_per_second=0 prices=0", supermarket.ID, details.DurationMS)
-		return r.repo.UpdateJob(ctx, job.ID, map[string]any{"status": "completed", "end_date": r.cfg.Now().UTC().Format(time.RFC3339), "details": details, "errors": errors})
+		return r.repo.UpdateJob(ctx, job.ID, map[string]any{"status": "completed", "end_date": r.cfg.Now().UTC().Format(time.RFC3339), "details": details, "errors": completedErrors()})
 	}
 	for i := 0; i < workers; i++ { wg.Add(1); go worker() }
 	for _, product := range products {
-		select { case jobs <- product: case <-ctx.Done(): close(jobs); wg.Wait(); _ = r.repo.UpdateJob(context.Background(), job.ID, map[string]any{"status": "failed", "end_date": r.cfg.Now().UTC().Format(time.RFC3339), "details": details, "errors": map[string]any{"_fatal": ctx.Err().Error()}}); return ctx.Err() }
+		select { case jobs <- product: case <-ctx.Done(): close(jobs); wg.Wait(); _ = r.repo.UpdateJob(context.Background(), job.ID, map[string]any{"status": "failed", "end_date": r.cfg.Now().UTC().Format(time.RFC3339), "details": details, "errors": []ProductError{{Code: "context_cancelled", Message: ctx.Err().Error(), Stage: "run"}}}); return ctx.Err() }
 	}
 	close(jobs)
 	wg.Wait()
@@ -102,6 +120,7 @@ func (r *Runner) Run(ctx context.Context, supermarket pocketbase.Supermarket) er
 	if len(errors) > 0 { status = "completed_with_errors" }
 	duration := time.Since(started)
 	details.DurationMS = duration.Milliseconds()
+	details.ProductsSaved = details.ProductsDone
 	details.PricesLoaded = pricesLoaded
 	details.MaxProductMS = maxProductDuration.Milliseconds()
 	if details.ProductsDone+details.ProductsFailed > 0 {
@@ -109,6 +128,7 @@ func (r *Runner) Run(ctx context.Context, supermarket pocketbase.Supermarket) er
 	}
 	if duration > 0 { details.ProductsPerSec = float64(details.ProductsDone) / duration.Seconds() }
 	r.cfg.Log.Printf("stats job finished supermarket=%s duration_ms=%d processed=%d failed=%d products_per_second=%.2f prices=%d", supermarket.ID, details.DurationMS, details.ProductsDone, details.ProductsFailed, details.ProductsPerSec, details.PricesLoaded)
+	if len(errors) == 0 { errors = completedErrors() }
 	if err := r.repo.UpdateJob(ctx, job.ID, map[string]any{"status": status, "end_date": r.cfg.Now().UTC().Format(time.RFC3339), "details": details, "errors": errors}); err != nil { return err }
 	return nil
 }
